@@ -174,6 +174,9 @@ tr.clickable:hover td{background:var(--paper);}
 .empty h3{color:var(--ink-2); margin-bottom:6px;}
 
 /* Tabs */
+.contact-multi-row{display:flex; gap:6px; align-items:center; margin-bottom:6px;}
+.contact-multi-row input{flex:1; padding:7px 9px; border:1px solid var(--line); border-radius:4px; background:var(--paper); font-size:13px; outline:none;}
+.contact-multi-row input:focus{border-color:var(--brass);}
 .tabs{display:flex; gap:2px; border-bottom:1px solid var(--line); margin-bottom:18px;}
 .tab{padding:9px 14px; font-size:13px; color:var(--ink-3); border-bottom:2px solid transparent; cursor:pointer;}
 .tab.active{color:var(--ink); border-color:var(--brass); font-weight:500;}
@@ -871,7 +874,7 @@ function viewSchoolProfile(id){
     body = `
     <div style="display:flex; justify-content:flex-end; margin-bottom:10px;"><button class="btn secondary small" data-open-modal="addContact" data-school-id="${id}">+ Add Contact</button></div>
     ${contacts.length ? `<table><thead><tr><th>Name</th><th>Designation</th><th>Email</th><th>Phone</th><th>Preferred Channel</th><th>Status</th></tr></thead><tbody>
-      ${contacts.map(c=>`<tr class="clickable" data-nav="contacts" data-focus-contact="${c.id}">
+      ${contacts.map(c=>`<tr class="clickable" data-open-modal="viewContact" data-id="${c.id}">
         <td><strong>${esc(c.name)}</strong></td><td>${c.designation}</td><td>${c.email?`<a href="${mailtoLink(c.email)}" onclick="event.stopPropagation();">${esc(c.email)}</a>`:""}</td><td>${esc(c.phone)}</td><td>${c.channel}</td>
         <td><span class="badge st ${statusBadgeClass(c.status)}">${c.status}</span></td></tr>`).join("")}
     </tbody></table>` : `<div class="empty">No contacts yet for this school.</div>`}`;
@@ -1369,26 +1372,95 @@ function openAddContact(schoolId){
     </div>
   `, `<button class="btn secondary" id="modalCancelBtn">Cancel</button><button class="btn brass" id="saveContactBtn">Add Contact</button>`));
 }
-function openViewContact(id){
+function openViewContact(id){ openContactProfile(id); }
+
+function openContactProfile(id, tab){
   const c = byId(STATE.contacts, id); if(!c) return;
+  tab = tab || UI.contactModalTab || "details";
+  UI.contactModalTab = tab;
   const sch = byId(STATE.schools, c.schoolId);
-  const log = STATE.activities.filter(a=>a.contactId===id).sort((a,b)=>b.date.localeCompare(a.date)).slice(0,8);
-  openModal(modalShell(esc(c.name), `
+  const followups = STATE.followUps.filter(f=>f.contactId===id);
+  const outreach = STATE.outreachMessages.filter(m=>m.contactId===id).sort((a,b)=>b.createdAt.localeCompare(a.createdAt));
+  const log = STATE.activities.filter(a=>a.contactId===id).sort((a,b)=>b.date.localeCompare(a.date));
+  const extraPhones = c.extraPhones || [];
+  const extraEmails = c.extraEmails || [];
+
+  const tabs = [
+    ["details","Details"],
+    ["followups","Follow-ups ("+followups.length+")"],
+    ["outreach","Outreach ("+outreach.length+")"],
+    ["timeline","Activity ("+log.length+")"]
+  ];
+
+  let body = "";
+  if(tab==="details"){
+    body = `
     <div class="form-grid">
-      <div class="field"><label>School</label><div>${esc(sch?.name||"—")}</div></div>
-      <div class="field"><label>Designation</label><div>${c.designation}</div></div>
-      <div class="field"><label>Email</label><div>${c.email?`<a href="${mailtoLink(c.email)}">${esc(c.email)}</a>`:"—"}</div></div>
-      <div class="field"><label>Phone</label><div>${esc(c.phone)}</div></div>
-      <div class="field"><label>Preferred Channel</label><div>${c.channel}</div></div>
+      <div class="field"><label>School</label><div>${esc(sch?.name||"—")}${sch?` <span class="tag" style="cursor:pointer;" id="gotoSchoolFromContact" data-school-id="${sch.id}">Open school →</span>`:""}</div></div>
+      <div class="field"><label>Full Name</label><input id="f_cname" value="${esc(c.name)}"></div>
+      <div class="field"><label>Designation</label><select id="f_cdesig">${DESIGNATIONS.map(d=>`<option ${c.designation===d?"selected":""}>${d}</option>`).join("")}</select></div>
+      <div class="field"><label>Preferred Channel</label><select id="f_cchannel">${CHANNELS.map(ch=>`<option ${c.channel===ch?"selected":""}>${ch}</option>`).join("")}</select></div>
+      <div class="field"><label>Decision-Maker Score</label><select id="f_cscore">${DM_SCORES.map(d=>`<option ${c.decisionScore===d?"selected":""}>${d}</option>`).join("")}</select></div>
+      <div class="field"><label>LinkedIn URL</label><input id="f_clinkedin" value="${esc(c.linkedin||"")}"></div>
       <div class="field"><label>Lead Activity</label><select id="f_cactivity"><option value="">— Select —</option>${LEAD_ACTIVITIES.map(s=>`<option ${c.leadActivity===s?"selected":""}>${s}</option>`).join("")}</select></div>
       <div class="field"><label>Lead Stage</label><select id="f_cstage"><option value="">— Select —</option>${LEAD_STAGES.map(s=>`<option ${c.leadStage===s?"selected":""}>${s}</option>`).join("")}</select></div>
     </div>
-    ${log.length?`<div class="field span2" style="margin-top:10px;"><label>Recent activity</label>
-      <div style="font-size:12.5px;color:var(--ink-3);">${log.map(a=>`<div style="padding:4px 0;border-bottom:1px solid var(--line-soft);">${fmtDate(a.date)} — ${esc(a.text)}</div>`).join("")}</div>
-    </div>`:""}
+
+    <div class="field span2" style="margin-top:16px;">
+      <label>Email addresses</label>
+      <div id="emailRows">
+        <div class="contact-multi-row"><input class="email-input" value="${esc(c.email||"")}" placeholder="Primary email"><button type="button" class="btn ghost small remove-row-btn">✕</button></div>
+        ${extraEmails.map(e=>`<div class="contact-multi-row"><input class="email-input" value="${esc(e)}" placeholder="Additional email"><button type="button" class="btn ghost small remove-row-btn">✕</button></div>`).join("")}
+      </div>
+      <button type="button" class="btn secondary small" id="addEmailBtn" style="margin-top:6px; align-self:flex-start;">+ Add email</button>
+    </div>
+
+    <div class="field span2" style="margin-top:14px;">
+      <label>Phone numbers</label>
+      <div id="phoneRows">
+        <div class="contact-multi-row"><input class="phone-input" value="${esc(c.phone||"")}" placeholder="Primary phone"><button type="button" class="btn ghost small remove-row-btn">✕</button></div>
+        ${extraPhones.map(p=>`<div class="contact-multi-row"><input class="phone-input" value="${esc(p)}" placeholder="Additional phone"><button type="button" class="btn ghost small remove-row-btn">✕</button></div>`).join("")}
+      </div>
+      <button type="button" class="btn secondary small" id="addPhoneBtn" style="margin-top:6px; align-self:flex-start;">+ Add phone</button>
+    </div>
+
+    <div class="field span2" style="margin-top:14px;">
+      <label>Notes</label>
+      <textarea id="f_cnotes" rows="4">${esc(c.notes||"")}</textarea>
+    </div>
+    `;
+  } else if(tab==="followups"){
+    body = `
+    <div class="panel" style="margin-bottom:14px;"><div class="panel-body">
+      <div class="form-grid">
+        <div class="field"><label>Channel</label><select id="f_flwChannel">${CHANNELS.map(ch=>`<option ${c.channel===ch?"selected":""}>${ch}</option>`).join("")}</select></div>
+        <div class="field"><label>Response Status</label><select id="f_flwResponse">${RESPONSE_STATUSES.map(s=>`<option>${s}</option>`).join("")}</select></div>
+        <div class="field"><label>Next Follow-up Date</label><input type="date" id="f_flwDate" value="${todayISO(3)}"></div>
+        <div class="field"><label>Note</label><input id="f_flwNote" placeholder="What happened / next step"></div>
+      </div>
+      <button class="btn secondary small" id="addFollowupBtn" data-id="${id}" style="margin-top:10px;">+ Add Follow-up</button>
+    </div></div>
+    ${followups.length ? `<table><thead><tr><th>Channel</th><th>Response</th><th>Next Follow-up</th><th>Status</th><th>Last Action</th></tr></thead><tbody>
+      ${followups.map(f=>`<tr><td>${f.channel}</td><td>${f.responseStatus}</td><td>${fmtDate(f.nextFollowupDate)}</td><td><span class="badge st ${statusBadgeClass(f.status)}">${f.status}</span></td><td>${esc(f.lastAction||"")}</td></tr>`).join("")}
+    </tbody></table>` : `<div class="empty">No follow-ups logged for this contact yet.</div>`}
+    `;
+  } else if(tab==="outreach"){
+    body = outreach.length ? outreach.map(m=>`<div class="panel" style="margin-bottom:10px;"><div class="panel-body">
+        <div style="display:flex; justify-content:space-between;"><strong>${m.channel}</strong><span class="badge st ${statusBadgeClass(m.status)}">${m.status}</span></div>
+        ${m.subject?`<div class="page-sub" style="margin-top:4px;">Subject: ${esc(m.subject)}</div>`:""}
+        <div style="margin-top:8px; white-space:pre-wrap; font-size:13px;">${esc(m.body).slice(0,320)}${m.body.length>320?"…":""}</div>
+        <div class="page-sub" style="margin-top:8px;">${fmtDate(m.createdAt)} · Quality ${m.qualityScore}/100</div>
+      </div></div>`).join("") : `<div class="empty">No outreach sent to this contact yet. <br><button class="btn brass" style="margin-top:10px;" id="goGenerateBtn2">Generate Outreach</button></div>`;
+  } else if(tab==="timeline"){
+    body = log.length ? `<div class="timeline">${log.map(a=>`<div class="tl-item"><div class="tl-date">${fmtDate(a.date)}</div><div class="tl-text">${esc(a.text)}</div></div>`).join("")}</div>` : `<div class="empty">No activity recorded yet.</div>`;
+  }
+
+  openModal(modalShell(esc(c.name), `
+    <div class="tabs">${tabs.map(([k,l])=>`<div class="tab ${tab===k?"active":""}" data-contact-tab="${k}" data-contact-id="${id}">${l}</div>`).join("")}</div>
+    ${body}
   `, `<button class="btn secondary" id="modalCancelBtn">Close</button>
       <button class="btn secondary" id="goGenerateBtn">Generate Outreach</button>
-      <button class="btn brass" id="saveContactStatusBtn" data-id="${id}">Save</button>`));
+      <button class="btn brass" id="saveContactStatusBtn" data-id="${id}">Save</button>`, true));
 }
 function openAddCampaign(){
   openModal(modalShell("New Campaign", `
@@ -1516,7 +1588,7 @@ function wireGlobal(){
         const [name,id]=it.getAttribute("data-sr-nav").split(":"); VIEW={name,params:{id}}; box.innerHTML=""; search.value=""; render();
       }));
       box.querySelectorAll("[data-sr-open]").forEach(it=>it.addEventListener("click",()=>{
-        const [name,id]=it.getAttribute("data-sr-open").split(":"); box.innerHTML=""; search.value=""; if(name==="viewContact") openViewContact(id); wireModal();
+        const [name,id]=it.getAttribute("data-sr-open").split(":"); box.innerHTML=""; search.value=""; if(name==="viewContact") openContactProfile(id); wireModal();
       }));
     });
   }
@@ -1529,7 +1601,7 @@ function wireGlobal(){
       const schoolId = el.getAttribute("data-school-id");
       if(type==="addSchool") openAddSchool();
       else if(type==="addContact") openAddContact(schoolId);
-      else if(type==="viewContact") openViewContact(id);
+      else if(type==="viewContact") openContactProfile(id);
       else if(type==="addCampaign") openAddCampaign();
       else if(type==="addSession") openAddSession(schoolId);
       else if(type==="sessionResults") openSessionResults(id);
@@ -1826,14 +1898,103 @@ function wireModal(){
     saveState(); closeModal(); render(); toast("Contact added.");
   });
 
+  // Contact profile modal: tab switching
+  document.querySelectorAll("[data-contact-tab]").forEach(el=>{
+    el.addEventListener("click", ()=>{
+      const cid = el.getAttribute("data-contact-id");
+      const t = el.getAttribute("data-contact-tab");
+      closeModal(); openContactProfile(cid, t); wireModal();
+    });
+  });
+
+  // Contact profile modal: add / remove email & phone rows (pure DOM, no full re-render so nothing typed is lost)
+  const addEmailBtn = document.getElementById("addEmailBtn");
+  if(addEmailBtn) addEmailBtn.addEventListener("click", ()=>{
+    const row = document.createElement("div");
+    row.className = "contact-multi-row";
+    row.innerHTML = `<input class="email-input" placeholder="Additional email"><button type="button" class="btn ghost small remove-row-btn">✕</button>`;
+    document.getElementById("emailRows").appendChild(row);
+    row.querySelector(".remove-row-btn").addEventListener("click", ()=>row.remove());
+    row.querySelector("input").focus();
+  });
+  const addPhoneBtn = document.getElementById("addPhoneBtn");
+  if(addPhoneBtn) addPhoneBtn.addEventListener("click", ()=>{
+    const row = document.createElement("div");
+    row.className = "contact-multi-row";
+    row.innerHTML = `<input class="phone-input" placeholder="Additional phone"><button type="button" class="btn ghost small remove-row-btn">✕</button>`;
+    document.getElementById("phoneRows").appendChild(row);
+    row.querySelector(".remove-row-btn").addEventListener("click", ()=>row.remove());
+    row.querySelector("input").focus();
+  });
+  document.querySelectorAll(".remove-row-btn").forEach(btn=>{
+    btn.addEventListener("click", ()=>btn.closest(".contact-multi-row").remove());
+  });
+
+  const gotoSchoolFromContact = document.getElementById("gotoSchoolFromContact");
+  if(gotoSchoolFromContact) gotoSchoolFromContact.addEventListener("click", ()=>{
+    const sid = gotoSchoolFromContact.getAttribute("data-school-id");
+    closeModal(); VIEW={name:"schoolProfile",params:{id:sid}}; UI.schoolTab="contacts"; render();
+  });
+
+  const goGenerateBtn2 = document.getElementById("goGenerateBtn2");
+  if(goGenerateBtn2) goGenerateBtn2.addEventListener("click", ()=>{
+    const idEl = document.getElementById("saveContactStatusBtn");
+    const id = idEl?.getAttribute("data-id");
+    const c = byId(STATE.contacts,id);
+    UI.aiForm = {...UI.aiForm, schoolId:c.schoolId, contactId:c.id}; UI.aiResult={};
+    closeModal(); VIEW={name:"aiGenerator",params:{}}; render();
+  });
+
+  const addFollowupBtn = document.getElementById("addFollowupBtn");
+  if(addFollowupBtn) addFollowupBtn.addEventListener("click", ()=>{
+    const cid = addFollowupBtn.getAttribute("data-id");
+    const c = byId(STATE.contacts, cid); if(!c) return;
+    const channel = val("f_flwChannel");
+    const responseStatus = val("f_flwResponse");
+    const nextFollowupDate = val("f_flwDate");
+    const note = val("f_flwNote").trim();
+    STATE.followUps.push({id:uid("flw"), contactId:cid, schoolId:c.schoolId, channel, message:"", responseStatus, nextFollowupDate, followupCount:0, lastAction:note||("Follow-up logged: "+responseStatus), assignedTo:"Marketing Team", status:"Pending"});
+    c.nextFollowup = nextFollowupDate;
+    if(responseStatus && responseStatus!=="No Response") c.status = responseStatus;
+    STATE.activities.push({id:uid("act"), schoolId:c.schoolId, contactId:cid, type:"followup", text:"Follow-up logged ("+channel+"): "+responseStatus+(note?" — "+note:""), date:todayISO()});
+    saveState(); closeModal(); openContactProfile(cid, "followups"); wireModal(); toast("Follow-up added.");
+  });
+
   const saveContactStatusBtn = document.getElementById("saveContactStatusBtn");
   if(saveContactStatusBtn) saveContactStatusBtn.addEventListener("click", ()=>{
     const id = saveContactStatusBtn.getAttribute("data-id");
     const c = byId(STATE.contacts, id);
+    const today = todayISO();
+
+    // Save editable contact details (name/designation/channel/score/linkedin/emails/phones/notes) if this modal has those fields
+    const nameEl = document.getElementById("f_cname");
+    if(nameEl){
+      const newName = nameEl.value.trim();
+      const newDesig = val("f_cdesig");
+      const newChannel = val("f_cchannel");
+      const newScore = val("f_cscore");
+      const newLinkedin = val("f_clinkedin").trim();
+      const newNotes = document.getElementById("f_cnotes") ? document.getElementById("f_cnotes").value : c.notes;
+
+      const emailInputs = Array.from(document.querySelectorAll(".email-input")).map(i=>i.value.trim()).filter(Boolean);
+      const phoneInputs = Array.from(document.querySelectorAll(".phone-input")).map(i=>i.value.trim()).filter(Boolean);
+      const newEmail = emailInputs[0] || "";
+      const newPhone = phoneInputs[0] || "";
+      const newExtraEmails = emailInputs.slice(1);
+      const newExtraPhones = phoneInputs.slice(1);
+
+      const changed = newName!==c.name || newDesig!==c.designation || newChannel!==c.channel || newEmail!==(c.email||"") || newPhone!==(c.phone||"")
+        || JSON.stringify(newExtraEmails)!==JSON.stringify(c.extraEmails||[]) || JSON.stringify(newExtraPhones)!==JSON.stringify(c.extraPhones||[]);
+      if(newName) c.name = newName;
+      c.designation = newDesig; c.channel = newChannel; c.email = newEmail; c.phone = newPhone;
+      c.decisionScore = newScore; c.linkedin = newLinkedin; c.notes = newNotes;
+      c.extraEmails = newExtraEmails; c.extraPhones = newExtraPhones;
+      if(changed) STATE.activities.push({id:uid("act"), schoolId:c.schoolId, contactId:c.id, type:"contact", text:"Contact details updated", date:today});
+    }
+
     const activity = val("f_cactivity");
     const stage = val("f_cstage");
-    if(!activity && !stage){ toast("Pick a Lead Activity and/or Lead Stage first."); return; }
-    const today = todayISO();
+    if(!activity && !stage){ saveState(); closeModal(); render(); toast("Contact updated."); return; }
     if(activity){
       c.leadActivity = activity;
       c.status = activity; // keep legacy status field in sync for filters/badges
